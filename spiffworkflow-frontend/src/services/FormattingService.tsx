@@ -9,19 +9,27 @@ const spiffFormatFunctions: { [key: string]: Function } = {
 const checkForSpiffFormats = (markdown: string) => {
   const replacer = (
     match: string,
-    spiffFormat: string,
-    originalValue: string
+    spiffFormatFunctionName: string,
+    originalValue: string,
+    otherArgs: string
   ) => {
-    if (spiffFormat in spiffFormatFunctions) {
-      return spiffFormatFunctions[spiffFormat](undefined, originalValue);
+    console.log(`otherArgs:${otherArgs}:`);
+    if (spiffFormatFunctionName in spiffFormatFunctions) {
+      return spiffFormatFunctions[spiffFormatFunctionName](
+        undefined,
+        originalValue
+      );
     }
     console.warn(
-      `attempted: ${match}, but ${spiffFormat} is not a valid conversion function`
+      `attempted: ${match}, but ${spiffFormatFunctionName} is not a valid conversion function`
     );
 
     return match;
   };
-  return markdown.replaceAll(/SPIFF_FORMAT:::(\w+)\(([^)]+)\)/g, replacer);
+  return markdown.replaceAll(
+    /SPIFF_FORMAT:::(\w+)\(([^,)]+)([^)]*)\)/g,
+    replacer
+  );
 };
 
 const FormattingService = {
