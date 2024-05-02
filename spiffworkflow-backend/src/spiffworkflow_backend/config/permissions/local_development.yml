@@ -9,9 +9,13 @@ users:
     email: nelson@spiffworkflow.org
     password: nelson
     preferred_username: Nelson
+  deklund:
+    service: local_open_id
+    email: david.eklund@xilis.net
+    preferred_username: deklund
 groups:
   admin:
-    users: [admin@spiffworkflow.org, nelson@spiffworkflow.org]
+    users: [admin@spiffworkflow.org, nelson@spiffworkflow.org, david.eklund@xilis.net]
   group1:
     users: [jason@sartography.com, kevin@sartography.com]
   group2:

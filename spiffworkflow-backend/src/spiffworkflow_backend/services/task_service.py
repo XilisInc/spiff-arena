@@ -10,7 +10,7 @@ from SpiffWorkflow.bpmn.workflow import BpmnWorkflow  # type: ignore
 from SpiffWorkflow.exceptions import WorkflowException  # type: ignore
 from SpiffWorkflow.task import Task as SpiffTask  # type: ignore
 from SpiffWorkflow.util.task import TaskState  # type: ignore
-from sqlalchemy import asc
+from sqlalchemy import asc, desc
 
 from spiffworkflow_backend.models.bpmn_process import BpmnProcessModel
 from spiffworkflow_backend.models.bpmn_process import BpmnProcessNotFoundError
@@ -713,7 +713,7 @@ class TaskService:
     def next_human_task_for_user(cls, process_instance_id: int, user_id: int) -> HumanTaskModel | None:
         next_human_task: HumanTaskModel | None = (
             HumanTaskModel.query.filter_by(process_instance_id=process_instance_id, completed=False)
-            .order_by(asc(HumanTaskModel.id))  # type: ignore
+            .order_by(desc(HumanTaskModel.id))  # type: ignore
             .join(HumanTaskUserModel)
             .filter_by(user_id=user_id)
             .first()

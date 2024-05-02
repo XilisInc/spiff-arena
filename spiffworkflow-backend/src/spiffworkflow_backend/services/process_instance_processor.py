@@ -1073,7 +1073,7 @@ class ProcessInstanceProcessor:
 
         self.extract_metadata(process_model_info)
 
-        for ready_or_waiting_task in ready_or_waiting_tasks:
+        for ready_or_waiting_task in reversed(ready_or_waiting_tasks):
             # filter out non-usertasks
             task_spec = ready_or_waiting_task.task_spec
             if task_spec.manual:
