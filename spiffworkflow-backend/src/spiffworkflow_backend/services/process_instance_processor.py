@@ -847,7 +847,15 @@ class ProcessInstanceProcessor:
             guest_user = UserService.find_or_create_guest_user()
             potential_owner_ids = [guest_user.id]
         elif re.match(r"(process.?)initiator", task_lane, re.IGNORECASE):
-            potential_owner_ids = [self.process_instance_model.process_initiator_id]
+            if "lane_owners" in task.data and task_lane in task.data["lane_owners"]:
+                group_model = GroupModel.query.filter_by(identifier=task.data["lane_owners"][task_lane][0]).first()
+                potential_owner_ids = [i.user_id for i in group_model.user_group_assignments]
+                self.raise_if_no_potential_owners(
+                    potential_owner_ids,
+                    f"Could not find any users in group to assign to lane: {task_lane}",
+                )
+            else:
+                potential_owner_ids = [self.process_instance_model.process_initiator_id]
         else:
             group_model = GroupModel.query.filter_by(identifier=task_lane).first()
             if group_model is not None:
