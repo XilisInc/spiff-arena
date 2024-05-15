@@ -52,6 +52,12 @@ export default function TaskShow() {
 
   const { addError, removeError } = useAPIError();
 
+  const addErrorCallback = useCallback((error: ErrorForDisplay) => {
+    addError(error);
+    // FIXME: not sure what to do about addError. adding it to this array causes the page to endlessly reload
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // if a user can complete a task then the for-me page should
   // always work for them so use that since it will work in all cases
   const navigateToInterstitial = useCallback(
@@ -112,7 +118,7 @@ export default function TaskShow() {
     };
     const handleTaskFetchError = (error: ErrorForDisplay) => {
       setAtLeastOneTaskFetchHasError(true);
-      addError(error);
+      addErrorCallback(error);
     };
 
     HttpService.makeCallToBackend({
@@ -125,9 +131,12 @@ export default function TaskShow() {
       successCallback: processTaskWithDataResult,
       failureCallback: handleTaskFetchError,
     });
-    // FIXME: not sure what to do about addError. adding it to this array causes the page to endlessly reload
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params, processBasicTaskResult]);
+  }, [
+    params.task_id,
+    params.process_instance_id,
+    processBasicTaskResult,
+    addErrorCallback,
+  ]);
 
   // Before we auto-saved form data, we remembered what data was in the form, and then created a synthetic submit event
   // in order to implement a "Save and close" button. That button no longer saves (since we have auto-save), but the crazy
@@ -351,7 +360,7 @@ export default function TaskShow() {
             id="close-button"
             onClick={handleCloseButton}
             disabled={formButtonsDisabled}
-            kind="secondary"
+            kind="primary"
             title="Save data as draft and close the form."
           >
             Save and close
@@ -454,7 +463,12 @@ export default function TaskShow() {
   if (basicTask && taskData) {
     pageElements.push({
       key: 'instructions-for-end-user',
-      component: <InstructionsForEndUser task={taskWithTaskData} />,
+      component: (
+        <InstructionsForEndUser
+          task={taskWithTaskData}
+          className="with-bottom-margin"
+        />
+      ),
     });
     pageElements.push({ key: 'main-form', component: formElement() });
   } else if (!atLeastOneTaskFetchHasError) {

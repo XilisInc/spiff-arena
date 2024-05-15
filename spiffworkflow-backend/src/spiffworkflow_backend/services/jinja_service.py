@@ -8,6 +8,7 @@ from SpiffWorkflow.task import Task as SpiffTask  # type: ignore
 
 from spiffworkflow_backend.exceptions.api_error import ApiError
 from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
+from spiffworkflow_backend.models.task_instructions_for_end_user import TaskInstructionsForEndUserModel
 from spiffworkflow_backend.services.task_service import TaskModelError
 from spiffworkflow_backend.services.task_service import TaskService
 
@@ -38,7 +39,9 @@ class JinjaHelpers:
 
 class JinjaService:
     @classmethod
-    def render_instructions_for_end_user(cls, task: TaskModel | SpiffTask | None = None, extensions: dict | None = None) -> str:
+    def render_instructions_for_end_user(
+        cls, task: TaskModel | SpiffTask | None = None, extensions: dict | None = None, task_data: dict | None = None
+    ) -> str:
         """Assure any instructions for end user are processed for jinja syntax."""
         if extensions is None:
             if isinstance(task, TaskModel):
@@ -48,7 +51,7 @@ class JinjaService:
         if extensions and "instructionsForEndUser" in extensions:
             if extensions["instructionsForEndUser"]:
                 try:
-                    return cls.render_jinja_template(extensions["instructionsForEndUser"], task)
+                    return cls.render_jinja_template(extensions["instructionsForEndUser"], task, task_data=task_data)
                 except TaskModelError as wfe:
                     wfe.add_note("Failed to render instructions for end user.")
                     raise ApiError.from_workflow_exception("instructions_error", str(wfe), exp=wfe) from wfe
@@ -99,3 +102,25 @@ class JinjaService:
                 tb = tb.tb_next
             wfe.add_note("Jinja2 template errors can happen when trying to display task data")
             raise wfe from error
+
+    @classmethod
+    def add_instruction_for_end_user_if_appropriate(
+        cls, spiff_tasks: list[SpiffTask], process_instance_id: int, tasks_that_have_been_seen: set[str]
+    ) -> None:
+        for spiff_task in spiff_tasks:
+            if spiff_task.task_spec.manual:
+                continue
+            if hasattr(spiff_task.task_spec, "extensions") and spiff_task.task_spec.extensions.get(
+                "instructionsForEndUser", None
+            ):
+                task_guid = str(spiff_task.id)
+                if task_guid in tasks_that_have_been_seen:
+                    continue
+                instruction = JinjaService.render_instructions_for_end_user(spiff_task)
+                if instruction != "":
+                    TaskInstructionsForEndUserModel.insert_or_update_record(
+                        task_guid=str(spiff_task.id),
+                        process_instance_id=process_instance_id,
+                        instruction=instruction,
+                    )
+                    tasks_that_have_been_seen.add(str(spiff_task.id))

@@ -27,6 +27,7 @@ export default function BaseRoutes({ extensionUxElements }: OwnProps) {
     return (
       <Route
         path={uxElement.page}
+        key={uxElement.page}
         element={<Extension pageIdentifier={uxElement.page} />}
       />
     );
@@ -75,10 +76,12 @@ export default function BaseRoutes({ extensionUxElements }: OwnProps) {
 
   const style = { margin: '50px 0 50px 50px' };
   return (
-    <Loading
-      description="Active loading indicator"
-      withOverlay={false}
-      style={style}
-    />
+    <div className="fixed-width-container">
+      <Loading
+        description="Active loading indicator"
+        withOverlay={false}
+        style={style}
+      />
+    </div>
   );
 }

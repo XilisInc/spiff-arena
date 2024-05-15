@@ -30,8 +30,6 @@ on:
   push:
     branches:
       - main
-      - spiffdemo
-      - feature/update-extension-docs
 
 jobs:
   create_frontend_docker_image:

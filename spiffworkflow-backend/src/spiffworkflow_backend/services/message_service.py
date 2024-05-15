@@ -1,4 +1,3 @@
-import os
 from typing import Any
 
 from flask import g
@@ -22,8 +21,10 @@ from spiffworkflow_backend.models.process_instance import ProcessInstanceModel
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.services.process_instance_processor import CustomBpmnScriptEngine
 from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceIsAlreadyLockedError
 from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceQueueService
 from spiffworkflow_backend.services.process_instance_service import ProcessInstanceService
+from spiffworkflow_backend.services.process_instance_tmp_service import ProcessInstanceTmpService
 from spiffworkflow_backend.services.user_service import UserService
 
 
@@ -70,37 +71,48 @@ class MessageService:
                     user: UserModel | None = message_instance_send.user
                     if user is None:
                         user = UserService.find_or_create_system_user()
-                    receiving_process = MessageService.start_process_with_message(message_triggerable_process_model, user)
+                    receiving_process_instance = MessageService.start_process_with_message(
+                        message_triggerable_process_model, user
+                    )
                     message_instance_receive = MessageInstanceModel.query.filter_by(
-                        process_instance_id=receiving_process.id,
+                        process_instance_id=receiving_process_instance.id,
                         message_type="receive",
                         status="ready",
                     ).first()
             else:
-                receiving_process = MessageService.get_process_instance_for_message_instance(message_instance_receive)
+                receiving_process_instance = MessageService.get_process_instance_for_message_instance(message_instance_receive)
 
             # Assure we can send the message, otherwise keep going.
-            if message_instance_receive is None or not receiving_process.can_receive_message():
-                message_instance_send.status = "ready"
+            if message_instance_receive is None or not receiving_process_instance.can_receive_message():
                 message_instance_send.status = "ready"
                 db.session.add(message_instance_send)
                 db.session.commit()
                 return None
 
-            # Set the receiving message to running, so it is not altered elswhere ...
-            message_instance_receive.status = "running"
+            try:
+                with ProcessInstanceQueueService.dequeued(receiving_process_instance):
+                    # Set the receiving message to running, so it is not altered elswhere ...
+                    message_instance_receive.status = "running"
 
-            cls.process_message_receive(
-                receiving_process, message_instance_receive, message_instance_send, execution_mode=execution_mode
-            )
-            message_instance_receive.status = "completed"
-            message_instance_receive.counterpart_id = message_instance_send.id
-            db.session.add(message_instance_receive)
-            message_instance_send.status = "completed"
-            message_instance_send.counterpart_id = message_instance_receive.id
-            db.session.add(message_instance_send)
-            db.session.commit()
-            return message_instance_receive
+                    cls.process_message_receive(
+                        receiving_process_instance, message_instance_receive, message_instance_send, execution_mode=execution_mode
+                    )
+                    message_instance_receive.status = "completed"
+                    message_instance_receive.counterpart_id = message_instance_send.id
+                    db.session.add(message_instance_receive)
+                    message_instance_send.status = "completed"
+                    message_instance_send.counterpart_id = message_instance_receive.id
+                    db.session.add(message_instance_send)
+                    db.session.commit()
+                if should_queue_process_instance(receiving_process_instance, execution_mode=execution_mode):
+                    queue_process_instance_if_appropriate(receiving_process_instance, execution_mode=execution_mode)
+                return message_instance_receive
+
+            except ProcessInstanceIsAlreadyLockedError:
+                message_instance_send.status = "ready"
+                db.session.add(message_instance_send)
+                db.session.commit()
+                return None
 
         except Exception as exception:
             db.session.rollback()
@@ -129,28 +141,22 @@ class MessageService:
         user: UserModel,
     ) -> ProcessInstanceModel:
         """Start up a process instance, so it is ready to catch the event."""
-        if os.environ.get("SPIFFWORKFLOW_BACKEND_RUNNING_IN_CELERY_WORKER") == "true":
-            raise MessageServiceError(
-                "Calling start_process_with_message in a celery worker. This is not supported! (We may need to add"
-                " additional_processing_identifier to this code path."
-            )
-
-        process_instance_receive = ProcessInstanceService.create_process_instance_from_process_model_identifier(
+        receiving_process_instance = ProcessInstanceService.create_process_instance_from_process_model_identifier(
             message_triggerable_process_model.process_model_identifier,
             user,
         )
-        with ProcessInstanceQueueService.dequeued(process_instance_receive):
-            processor_receive = ProcessInstanceProcessor(process_instance_receive)
+        with ProcessInstanceQueueService.dequeued(receiving_process_instance):
+            processor_receive = ProcessInstanceProcessor(receiving_process_instance)
             cls._cancel_non_matching_start_events(processor_receive, message_triggerable_process_model)
             processor_receive.save()
 
         processor_receive.do_engine_steps(save=True)
 
-        return process_instance_receive
+        return receiving_process_instance
 
     @staticmethod
     def process_message_receive(
-        process_instance_receive: ProcessInstanceModel,
+        receiving_process_instance: ProcessInstanceModel,
         message_instance_receive: MessageInstanceModel,
         message_instance_send: MessageInstanceModel,
         execution_mode: str | None = None,
@@ -173,16 +179,15 @@ class MessageService:
             payload=message_instance_send.payload,
             correlations=message_instance_send.correlation_keys,
         )
-        processor_receive = ProcessInstanceProcessor(process_instance_receive)
+        processor_receive = ProcessInstanceProcessor(receiving_process_instance)
         processor_receive.bpmn_process_instance.send_event(bpmn_event)
         execution_strategy_name = None
 
-        if should_queue_process_instance(process_instance_receive, execution_mode=execution_mode):
+        if should_queue_process_instance(receiving_process_instance, execution_mode=execution_mode):
             # even if we are queueing, we ran a "send_event" call up above, and it updated some tasks.
             # we need to serialize these task updates to the db. do_engine_steps with save does that.
             processor_receive.do_engine_steps(save=True, execution_strategy_name="run_current_ready_tasks")
-            queue_process_instance_if_appropriate(process_instance_receive, execution_mode=execution_mode)
-        elif not ProcessInstanceQueueService.is_enqueued_to_run_in_the_future(process_instance_receive):
+        elif not ProcessInstanceTmpService.is_enqueued_to_run_in_the_future(receiving_process_instance):
             execution_strategy_name = None
             if execution_mode == ProcessInstanceExecutionMode.synchronous.value:
                 execution_strategy_name = "greedy"
@@ -286,10 +291,10 @@ class MessageService:
     def get_process_instance_for_message_instance(
         message_instance_receive: MessageInstanceModel,
     ) -> ProcessInstanceModel:
-        process_instance_receive: ProcessInstanceModel = ProcessInstanceModel.query.filter_by(
+        receiving_process_instance: ProcessInstanceModel = ProcessInstanceModel.query.filter_by(
             id=message_instance_receive.process_instance_id
         ).first()
-        if process_instance_receive is None:
+        if receiving_process_instance is None:
             raise MessageServiceError(
                 (
                     (
@@ -299,4 +304,4 @@ class MessageService:
                     ),
                 )
             )
-        return process_instance_receive
+        return receiving_process_instance

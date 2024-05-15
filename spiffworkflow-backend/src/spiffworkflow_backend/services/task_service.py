@@ -12,6 +12,7 @@ from SpiffWorkflow.task import Task as SpiffTask  # type: ignore
 from SpiffWorkflow.util.task import TaskState  # type: ignore
 from sqlalchemy import asc, desc
 
+from spiffworkflow_backend.exceptions.error import TaskMismatchError
 from spiffworkflow_backend.models.bpmn_process import BpmnProcessModel
 from spiffworkflow_backend.models.bpmn_process import BpmnProcessNotFoundError
 from spiffworkflow_backend.models.bpmn_process_definition import BpmnProcessDefinitionModel
@@ -110,10 +111,16 @@ class TaskService:
         serializer: BpmnWorkflowSerializer,
         bpmn_definition_to_task_definitions_mappings: dict,
         run_started_at: float | None = None,
+        force_update_definitions: bool = False,
     ) -> None:
         self.process_instance = process_instance
         self.bpmn_definition_to_task_definitions_mappings = bpmn_definition_to_task_definitions_mappings
         self.serializer = serializer
+
+        # this updates the definition ids for both tasks and bpmn_processes when they are updated
+        # in case definitions were changed for the same instances.
+        # this is currently only used when importing a process instance from bpmn json or when running data migrations.
+        self.force_update_definitions = force_update_definitions
 
         self.bpmn_processes: dict[str, BpmnProcessModel] = {}
         self.task_models: dict[str, TaskModel] = {}
@@ -180,6 +187,7 @@ class TaskService:
         self,
         spiff_task: SpiffTask,
         start_and_end_times: StartAndEndTimes | None = None,
+        store_process_instance_events: bool = True,
     ) -> TaskModel:
         new_bpmn_process = None
         if str(spiff_task.id) in self.task_models:
@@ -209,8 +217,10 @@ class TaskService:
 
         # let failed tasks raise and we will log the event then.
         # avoid creating events for the same state transition multiple times to avoid multiple cancelled events
-        if task_model.state in ["COMPLETED", "CANCELLED"] and (
-            self.run_started_at is None or spiff_task.last_state_change >= self.run_started_at
+        if (
+            store_process_instance_events
+            and task_model.state in ["COMPLETED", "CANCELLED"]
+            and (self.run_started_at is None or spiff_task.last_state_change >= self.run_started_at)
         ):
             event_type = ProcessInstanceEventType.task_completed.value
             if task_model.state == "CANCELLED":
@@ -228,6 +238,12 @@ class TaskService:
                 add_to_db_session=False,
             )
             self.process_instance_events[task_model.guid] = process_instance_event
+
+        if self.force_update_definitions is True:
+            task_definition = self.bpmn_definition_to_task_definitions_mappings[spiff_task.workflow.spec.name][
+                spiff_task.task_spec.name
+            ]
+            task_model.task_definition_id = task_definition.id
 
         self.update_bpmn_process(spiff_task.workflow, bpmn_process)
         return task_model
@@ -252,6 +268,12 @@ class TaskService:
             direct_parent_bpmn_process = BpmnProcessModel.query.filter_by(id=bpmn_process.direct_parent_process_id).first()
             self.update_bpmn_process(spiff_workflow.parent_workflow, direct_parent_bpmn_process)
 
+        if self.force_update_definitions is True:
+            bpmn_process_definition = self.bpmn_definition_to_task_definitions_mappings[spiff_workflow.spec.name][
+                "bpmn_process_definition"
+            ]
+            bpmn_process.bpmn_process_definition_id = bpmn_process_definition.id
+
     def update_task_model(
         self,
         task_model: TaskModel,
@@ -262,6 +284,10 @@ class TaskService:
         This will NOT update start_in_seconds or end_in_seconds.
         It also returns the relating json_data object so they can be imported later.
         """
+        if str(spiff_task.id) != task_model.guid:
+            raise TaskMismatchError(
+                f"Given spiff task ({spiff_task.task_spec.bpmn_id} - {spiff_task.id}) and task ({task_model.guid}) must match"
+            )
 
         new_properties_json = self.serializer.to_dict(spiff_task)
 
@@ -294,17 +320,16 @@ class TaskService:
             bpmn_process = self.task_bpmn_process(
                 spiff_task,
             )
-            task_model = TaskModel.query.filter_by(guid=spiff_task_guid).first()
-            if task_model is None:
-                task_definition = self.bpmn_definition_to_task_definitions_mappings[spiff_task.workflow.spec.name][
-                    spiff_task.task_spec.name
-                ]
-                task_model = TaskModel(
-                    guid=spiff_task_guid,
-                    bpmn_process_id=bpmn_process.id,
-                    process_instance_id=self.process_instance.id,
-                    task_definition_id=task_definition.id,
-                )
+            task_definition = self.bpmn_definition_to_task_definitions_mappings[spiff_task.workflow.spec.name][
+                spiff_task.task_spec.name
+            ]
+            task_model = TaskModel(
+                guid=spiff_task_guid,
+                bpmn_process_id=bpmn_process.id,
+                process_instance_id=self.process_instance.id,
+                task_definition_id=task_definition.id,
+            )
+
         return (bpmn_process, task_model)
 
     def task_bpmn_process(

@@ -17,6 +17,10 @@ function log_info() {
 # run migrations
 export FLASK_APP=/app/src/spiffworkflow_backend
 
+if [[ -z "${FLASK_DEBUG:-}" ]]; then
+  export FLASK_DEBUG=0
+fi
+
 if [[ "${SPIFFWORKFLOW_BACKEND_WAIT_FOR_DB_TO_BE_READY:-}" == "true" ]]; then
   echo 'Waiting for db to be ready...'
   poetry run python ./bin/wait_for_db_to_be_ready.py
@@ -49,7 +53,16 @@ additional_args=""
 
 app_root="${SPIFFWORKFLOW_BACKEND_APPLICATION_ROOT:-}"
 if [[ -n "$app_root" ]] && [[ "${app_root}" != "/" ]]; then
-  additional_args="${additional_args} -e SCRIPT_NAME=${app_root}"
+  echo >&2 "ERROR: SPIFFWORKFLOW_BACKEND_APPLICATION_ROOT has been set. This variable has been renamed to SPIFFWORKFLOW_BACKEND_WSGI_PATH_PREFIX. Please use that instead."
+  exit 1
+fi
+path_prefix="${SPIFFWORKFLOW_BACKEND_WSGI_PATH_PREFIX:-}"
+if [[ -n "$path_prefix" ]] && [[ "${path_prefix}" != "/" ]]; then
+  if ! grep -E '^/' <<<"${path_prefix}"; then
+    echo >&2 "ERROR: SPIFFWORKFLOW_BACKEND_WSGI_PATH_PREFIX must start with a '/'. '$SPIFFWORKFLOW_BACKEND_WSGI_PATH_PREFIX' was used instead."
+    exit 1
+  fi
+  additional_args="${additional_args} -e SCRIPT_NAME=${path_prefix}"
 fi
 
 # HACK: if loading fixtures for acceptance tests when we do not need multiple workers
@@ -59,19 +72,19 @@ if [[ "${SPIFFWORKFLOW_BACKEND_LOAD_FIXTURE_DATA:-}" == "true" ]]; then
   worker_count=1
 fi
 
-if [[ "${SPIFFWORKFLOW_BACKEND_RUN_DATA_SETUP:-}" != "false" ]]; then
-  SPIFFWORKFLOW_BACKEND_FAIL_ON_INVALID_PROCESS_MODELS=false poetry run python bin/save_all_bpmn.py
-fi
-
-if [[ -n "${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY:-}" ]]; then
-  if [[ -z "${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH:-}" ]]; then
+if [[ -z "${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH:-}" ]]; then
+  if [[ -n "${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY:-}" ]]; then
     export SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH=$(mktemp /tmp/ssh_private_key.XXXXXX)
+    chmod 600 "${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH}"
+    echo "${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY}" >"${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH}"
   fi
-  chmod 600 "${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH}"
-  echo "${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY}" >"${SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH}"
 fi
 
-# Assure that the the Process Models Directory is initialized as a git repo
+if [[ -n "${SPIFFWORKFLOW_BACKEND_GIT_CLONE_PROCESS_MODELS:-}" ]]; then
+  ./bin/clone_process_models
+fi
+
+# ensure that the Process Models Directory is initialized as a git repo
 log_info "Running git init"
 git init "${SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR}"
 git config --global --add safe.directory "${SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR}"
@@ -100,6 +113,14 @@ fi
 # TODO: make a system somewhat like schema migrations (storing versions in a db table) to handle data migrations
 log_info "Running data migrations"
 poetry run python ./bin/data_migrations/run_all.py
+
+##### DO THIS right before starting the server
+if [[ "${SPIFFWORKFLOW_BACKEND_RUN_DATA_SETUP:-}" != "false" ]]; then
+  if [[ -z "${SPIFFWORKFLOW_BACKEND_FAIL_ON_INVALID_PROCESS_MODELS:-}" ]]; then
+    export SPIFFWORKFLOW_BACKEND_FAIL_ON_INVALID_PROCESS_MODELS=false
+  fi
+  poetry run python bin/save_all_bpmn.py
+fi
 
 # --worker-class is not strictly necessary, since setting threads will automatically set the worker class to gthread, but meh
 log_info "Starting gunicorn server"

@@ -55,6 +55,7 @@ from spiffworkflow_backend.services.process_instance_queue_service import Proces
 from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceQueueService
 from spiffworkflow_backend.services.process_instance_report_service import ProcessInstanceReportService
 from spiffworkflow_backend.services.process_instance_service import ProcessInstanceService
+from spiffworkflow_backend.services.process_instance_tmp_service import ProcessInstanceTmpService
 from spiffworkflow_backend.services.process_model_service import ProcessModelService
 from spiffworkflow_backend.services.task_service import TaskService
 
@@ -491,7 +492,12 @@ def _process_instance_task_list(
                 full_bpmn_process_path = bpmn_process_cache[task_model.bpmn_process_guid]
 
             row_key = f"{':::'.join(full_bpmn_process_path)}:::{task_model.bpmn_identifier}"
-            if (
+            if task_model.runtime_info and ("instance" in task_model.runtime_info or "iteration" in task_model.runtime_info):
+                # This handles adding all instances of a MI and iterations of loop tasks
+                additional_tasks.append(task_model)
+                if task_model.typename in ["SubWorkflowTask", "CallActivity"]:
+                    relevant_subprocess_guids.add(task_model.guid)
+            elif (
                 row_key not in most_recent_tasks
                 or most_recent_tasks[row_key].properties_json["last_state_change"]
                 < task_model.properties_json["last_state_change"]
@@ -502,9 +508,6 @@ def _process_instance_task_list(
                 # since any task like would no longer be in the list anyway and therefore will not be returned
                 if task_model.typename in ["SubWorkflowTask", "CallActivity"]:
                     relevant_subprocess_guids.add(task_model.guid)
-            elif task_model.runtime_info and ("instance" in task_model.runtime_info or "iteration" in task_model.runtime_info):
-                # This handles adding all instances of a MI and iterations of loop tasks
-                additional_tasks.append(task_model)
 
         task_models = [
             task_model
@@ -658,9 +661,10 @@ def _process_instance_run(
 
     processor = None
     try:
+        ProcessInstanceTmpService.add_event_to_process_instance(process_instance, "process_instance_force_run")
         if not queue_process_instance_if_appropriate(
             process_instance, execution_mode=execution_mode
-        ) and not ProcessInstanceQueueService.is_enqueued_to_run_in_the_future(process_instance):
+        ) and not ProcessInstanceTmpService.is_enqueued_to_run_in_the_future(process_instance):
             execution_strategy_name = None
             if execution_mode == ProcessInstanceExecutionMode.synchronous.value:
                 execution_strategy_name = "greedy"

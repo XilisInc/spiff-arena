@@ -31,7 +31,6 @@ class ProcessModelFileInvalidError(Exception):
 
 
 class SpecFileService(FileSystemService):
-
     """We store spec files on the file system. This allows us to take advantage of Git for
     syncing and versioning.
      The files are stored in a directory whose path is determined by the category and spec names.
@@ -57,15 +56,17 @@ class SpecFileService(FileSystemService):
 
     @classmethod
     def get_references_for_file(cls, file: File, process_model_info: ProcessModelInfo) -> list[Reference]:
-        full_file_path = SpecFileService.full_file_path(process_model_info, file.name)
-        file_contents: bytes = b""
-        with open(full_file_path) as f:
-            file_contents = f.read().encode()
+        full_file_path = cls.full_file_path(process_model_info, file.name)
+        with open(full_file_path, "rb") as f:
+            file_contents = f.read()
         return cls.get_references_for_file_contents(process_model_info, file.name, file_contents)
 
+    # This is designed to isolate xml parsing, which is a security issue, and make it as safe as possible.
+    # S320 indicates that xml parsing with lxml is unsafe. To mitigate this, we add options to the parser
+    # to make it as safe as we can. No exploits have been demonstrated with this parser, but we will try to stay alert.
     @classmethod
     def get_etree_from_xml_bytes(cls, binary_data: bytes) -> etree.Element:
-        etree_xml_parser = etree.XMLParser(resolve_entities=False)
+        etree_xml_parser = etree.XMLParser(resolve_entities=False, remove_comments=True, no_network=True)
         return etree.fromstring(binary_data, parser=etree_xml_parser)  # noqa: S320
 
     @classmethod
@@ -137,11 +138,6 @@ class SpecFileService(FileSystemService):
             )
         return references
 
-    @staticmethod
-    def add_file(process_model_info: ProcessModelInfo, file_name: str, binary_data: bytes) -> File:
-        # Same as update
-        return SpecFileService.update_file(process_model_info, file_name, binary_data)
-
     @classmethod
     def validate_bpmn_xml(cls, file_name: str, binary_data: bytes) -> None:
         file_type = FileSystemService.file_type(file_name)
@@ -155,8 +151,13 @@ class SpecFileService(FileSystemService):
 
     @classmethod
     def update_file(
-        cls, process_model_info: ProcessModelInfo, file_name: str, binary_data: bytes, user: UserModel | None = None
-    ) -> File:
+        cls,
+        process_model_info: ProcessModelInfo,
+        file_name: str,
+        binary_data: bytes,
+        user: UserModel | None = None,
+        update_process_cache_only: bool = False,
+    ) -> tuple[File, list[Reference]]:
         SpecFileService.assert_valid_file_name(file_name)
         cls.validate_bpmn_xml(file_name, binary_data)
 
@@ -188,7 +189,10 @@ class SpecFileService(FileSystemService):
                     )
 
             all_called_element_ids = all_called_element_ids | set(ref.called_element_ids)
-            SpecFileService.update_all_caches(ref)
+            if update_process_cache_only:
+                SpecFileService.update_process_cache(ref)
+            else:
+                SpecFileService.update_all_caches(ref)
 
         if user is not None:
             called_element_refs = (
@@ -216,7 +220,7 @@ class SpecFileService(FileSystemService):
         # make sure we save the file as the last thing we do to ensure validations have run
         full_file_path = SpecFileService.full_file_path(process_model_info, file_name)
         SpecFileService.write_file_data_to_system(full_file_path, binary_data)
-        return SpecFileService.to_file_object(file_name, full_file_path)
+        return (SpecFileService.to_file_object(file_name, full_file_path), references)
 
     @staticmethod
     def last_modified(process_model: ProcessModelInfo, file_name: str) -> datetime:
@@ -263,20 +267,13 @@ class SpecFileService(FileSystemService):
             .all()
         )
 
-        process_ids = []
+        reference_cache_ids = []
 
         for record in records:
-            process_ids.append(record.identifier)
+            reference_cache_ids.append(record.id)
             db.session.delete(record)
 
-        ProcessCallerService.clear_cache_for_process_ids(process_ids)
-        # fixme:  likely the other caches should be cleared as well, but we don't have a clean way to do so yet.
-
-    @staticmethod
-    def clear_caches() -> None:
-        db.session.query(ReferenceCacheModel).delete()
-        ProcessCallerService.clear_cache()
-        # fixme:  likely the other caches should be cleared as well, but we don't have a clean way to do so yet.
+        ProcessCallerService.clear_cache_for_process_ids(reference_cache_ids)
 
     @staticmethod
     def update_process_cache(ref: Reference) -> None:

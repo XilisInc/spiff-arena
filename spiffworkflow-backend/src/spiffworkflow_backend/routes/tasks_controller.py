@@ -11,7 +11,6 @@ from flask import jsonify
 from flask import make_response
 from flask import stream_with_context
 from flask.wrappers import Response
-from MySQLdb import OperationalError  # type: ignore
 from SpiffWorkflow.bpmn.exceptions import WorkflowTaskException  # type: ignore
 from SpiffWorkflow.bpmn.workflow import BpmnWorkflow  # type: ignore
 from SpiffWorkflow.task import Task as SpiffTask  # type: ignore
@@ -19,9 +18,11 @@ from SpiffWorkflow.util.task import TaskState  # type: ignore
 from sqlalchemy import and_
 from sqlalchemy import desc
 from sqlalchemy import func
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.util import AliasedClass
 
+from spiffworkflow_backend.constants import SPIFFWORKFLOW_BACKEND_SERIALIZER_VERSION
 from spiffworkflow_backend.data_migrations.process_instance_migrator import ProcessInstanceMigrator
 from spiffworkflow_backend.exceptions.api_error import ApiError
 from spiffworkflow_backend.exceptions.error import HumanTaskAlreadyCompletedError
@@ -454,7 +455,9 @@ def process_instance_progress(
     if next_human_task_assigned_to_me:
         response["task"] = HumanTaskModel.to_task(next_human_task_assigned_to_me)
     # this may not catch all times we should redirect to instance show page
-    elif not process_instance.is_immediately_runnable():
+    elif not process_instance.is_immediately_runnable() or ProcessInstanceTmpService.is_enqueued_to_run_in_the_future(
+        process_instance
+    ):
         # any time we assign this process_instance, the frontend progress page will redirect to process instance show
         response["process_instance"] = process_instance
 
@@ -466,7 +469,7 @@ def process_instance_progress(
 
 def task_with_instruction(process_instance_id: int) -> Response:
     process_instance = _find_process_instance_by_id_or_raise(process_instance_id)
-    processor = ProcessInstanceProcessor(process_instance)
+    processor = ProcessInstanceProcessor(process_instance, include_task_data_for_completed_tasks=True)
     spiff_task = processor.next_task()
     task = None
     if spiff_task is not None:
@@ -483,8 +486,8 @@ def task_with_instruction(process_instance_id: int) -> Response:
     return make_response(jsonify({"task": task}), 200)
 
 
-def _render_instructions(spiff_task: SpiffTask) -> str:
-    return JinjaService.render_instructions_for_end_user(spiff_task)
+def _render_instructions(spiff_task: SpiffTask, task_data: dict | None = None) -> str:
+    return JinjaService.render_instructions_for_end_user(spiff_task, task_data=task_data)
 
 
 def _interstitial_stream(
@@ -585,9 +588,18 @@ def _interstitial_stream(
 
     spiff_task = processor.next_task()
     if spiff_task is not None and spiff_task.id not in reported_ids:
+        task_data = spiff_task.data
+        if task_data is None or task_data == {}:
+            json_data = (
+                JsonDataModel.query.join(TaskModel, TaskModel.json_data_hash == JsonDataModel.hash)
+                .filter(TaskModel.guid == str(spiff_task.id))
+                .first()
+            )
+            if json_data is not None:
+                task_data = json_data.data
         task = ProcessInstanceService.spiff_task_to_api_task(processor, spiff_task)
         try:
-            instructions = _render_instructions(spiff_task)
+            instructions = _render_instructions(spiff_task, task_data=task_data)
         except Exception as e:
             api_error = ApiError(
                 error_code="engine_steps_error",
@@ -614,7 +626,7 @@ def _dequeued_interstitial_stream(
         # need something better to show?
         if execute_tasks:
             try:
-                if not ProcessInstanceQueueService.is_enqueued_to_run_in_the_future(process_instance):
+                if not ProcessInstanceTmpService.is_enqueued_to_run_in_the_future(process_instance):
                     with ProcessInstanceQueueService.dequeued(process_instance):
                         ProcessInstanceMigrator.run(process_instance)
                         yield from _interstitial_stream(process_instance, execute_tasks=execute_tasks)
@@ -624,7 +636,7 @@ def _dequeued_interstitial_stream(
             # attempt to run the migrator even for a readonly operation if the process instance is not newest
             if (
                 process_instance.spiff_serializer_version is not None
-                and process_instance.spiff_serializer_version < ProcessInstanceMigrator.CURRENT_VERSION
+                and process_instance.spiff_serializer_version < SPIFFWORKFLOW_BACKEND_SERIALIZER_VERSION
             ):
                 try:
                     with ProcessInstanceQueueService.dequeued(process_instance):

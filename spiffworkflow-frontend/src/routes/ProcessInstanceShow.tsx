@@ -237,6 +237,11 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     processInstanceShowPageBaseUrl = processInstanceShowPageBaseUrlAllVariant;
   }
 
+  const bpmnProcessGuid = searchParams.get('bpmn_process_guid');
+  const tab = searchParams.get('tab');
+  const taskSubTab = searchParams.get('taskSubTab');
+  const processIdentifier = searchParams.get('process_identifier');
+
   const handleAddErrorInUseEffect = useCallback((value: ErrorForDisplay) => {
     addError(value);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -262,7 +267,6 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     if (typeof params.to_task_guid !== 'undefined') {
       taskParams = `${taskParams}&to_task_guid=${params.to_task_guid}`;
     }
-    const bpmnProcessGuid = searchParams.get('bpmn_process_guid');
     if (bpmnProcessGuid) {
       taskParams = `${taskParams}&bpmn_process_guid=${bpmnProcessGuid}`;
     }
@@ -283,13 +287,12 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     ability,
     handleAddErrorInUseEffect,
     params.to_task_guid,
-    searchParams,
     taskListPath,
+    bpmnProcessGuid,
   ]);
 
   const getProcessInstance = useCallback(() => {
     let queryParams = '';
-    const processIdentifier = searchParams.get('process_identifier');
     if (processIdentifier) {
       queryParams = `?process_identifier=${processIdentifier}`;
     }
@@ -301,7 +304,12 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
       path: `${apiPath}/${modifiedProcessModelId}/${params.process_instance_id}${queryParams}`,
       successCallback: setProcessInstance,
     });
-  }, [params, modifiedProcessModelId, searchParams, variant]);
+  }, [
+    params.process_instance_id,
+    modifiedProcessModelId,
+    variant,
+    processIdentifier,
+  ]);
 
   useEffect(() => {
     if (processInstance) {
@@ -320,20 +328,19 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     getProcessInstance();
     getActionableTaskList();
 
-    if (searchParams.get('tab')) {
-      setSelectedTabIndex(parseInt(searchParams.get('tab') || '0', 10));
+    if (tab) {
+      setSelectedTabIndex(parseInt(tab || '0', 10));
     }
-    if (searchParams.get('taskSubTab')) {
-      setSelectedTaskTabSubTab(
-        parseInt(searchParams.get('taskSubTab') || '0', 10)
-      );
+    if (taskSubTab) {
+      setSelectedTaskTabSubTab(parseInt(taskSubTab || '0', 10));
     }
     return undefined;
   }, [
     permissionsLoaded,
     getActionableTaskList,
     getProcessInstance,
-    searchParams,
+    tab,
+    taskSubTab,
   ]);
 
   const updateSearchParams = (value: string, key: string) => {
@@ -354,14 +361,12 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
   };
 
   const queryParams = () => {
-    const processIdentifier = searchParams.get('process_identifier');
-    const callActivityTaskId = searchParams.get('bpmn_process_guid');
     const queryParamArray = [];
     if (processIdentifier) {
       queryParamArray.push(`process_identifier=${processIdentifier}`);
     }
-    if (callActivityTaskId) {
-      queryParamArray.push(`bpmn_process_guid=${callActivityTaskId}`);
+    if (bpmnProcessGuid) {
+      queryParamArray.push(`bpmn_process_guid=${bpmnProcessGuid}`);
     }
     let queryParamString = '';
     if (queryParamArray.length > 0) {
@@ -790,15 +795,15 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     }
     const dataObjectIdentifer = dataObjectRef.id;
     const parentProcess = shapeElement.businessObject.$parent;
-    const processIdentifier = parentProcess.id;
+    const parentProcessIdentifier = parentProcess.id;
 
     let additionalParams = '';
     if (tasks) {
       const matchingTask: Task | undefined = tasks.find((task: Task) => {
-        return task.bpmn_identifier === processIdentifier;
+        return task.bpmn_identifier === parentProcessIdentifier;
       });
       if (matchingTask) {
-        additionalParams = `?process_identifier=${processIdentifier}&bpmn_process_guid=${matchingTask.guid}`;
+        additionalParams = `?process_identifier=${parentProcessIdentifier}&bpmn_process_guid=${matchingTask.guid}`;
       } else if (
         searchParams.get('process_identifier') &&
         searchParams.get('bpmn_process_guid')
@@ -1344,10 +1349,10 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
 
   const switchToTask = (taskGuid: string, taskListToUse: Task[] | null) => {
     if (taskListToUse && taskToDisplay) {
-      // set to null right away to hopefully avoid using the incorrect task later
-      setTaskToDisplay(null);
       const task = taskListToUse.find((t: Task) => t.guid === taskGuid);
       if (task) {
+        // set to null right away to hopefully avoid using the incorrect task later
+        setTaskToDisplay(null);
         setTaskToDisplay(task);
         initializeTaskDataToDisplay(task);
       }
@@ -1394,7 +1399,10 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     );
   };
 
-  const createButtonsForMultiTasks = (instances: number[]) => {
+  const createButtonsForMultiTasks = (
+    instances: number[],
+    infoType: string
+  ) => {
     if (!tasks || !taskToDisplay) {
       return [];
     }
@@ -1402,6 +1410,7 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
       return (
         <Button
           kind="ghost"
+          key={`btn-switch-instance-${infoType}-${v}`}
           onClick={() =>
             switchToTask(taskToDisplay.runtime_info.instance_map[v], tasks)
           }
@@ -1425,6 +1434,7 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     ) {
       accordionItems.push(
         <AccordionItem
+          key="mi-task-instances"
           title={`Task instances (${taskInstancesToDisplay.length})`}
           className="task-info-modal-accordion"
         >
@@ -1437,25 +1447,27 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
       ['completed', 'running', 'future'].forEach((infoType: string) => {
         let taskInstances: ReactElement[] = [];
         const infoArray = taskToDisplay.runtime_info[infoType];
-        if (taskToDisplay.runtime_info.completed.length > 0) {
-          taskInstances = createButtonsForMultiTasks(infoArray);
-          accordionItems.push(
-            <AccordionItem
-              title={`${titleizeString(infoType)} instances for MI task (${
-                taskInstances.length
-              })`}
-            >
-              {taskInstances}
-            </AccordionItem>
-          );
-        }
+        taskInstances = createButtonsForMultiTasks(infoArray, infoType);
+        accordionItems.push(
+          <AccordionItem
+            key={`mi-instance-${titleizeString(infoType)}`}
+            title={`${titleizeString(infoType)} instances for MI task (${
+              taskInstances.length
+            })`}
+          >
+            {taskInstances}
+          </AccordionItem>
+        );
       });
     }
     if (LOOP_TASK_TYPES.includes(taskToDisplay.typename)) {
       const loopTaskInstanceIndexes = [
         ...Array(taskToDisplay.runtime_info.iterations_completed).keys(),
       ];
-      const buttons = createButtonsForMultiTasks(loopTaskInstanceIndexes);
+      const buttons = createButtonsForMultiTasks(
+        loopTaskInstanceIndexes,
+        'mi-loop-iterations'
+      );
       let text = '';
       if (
         typeof taskToDisplay.runtime_info.iterations_remaining !==
@@ -1465,7 +1477,10 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
         text += `${taskToDisplay.runtime_info.iterations_remaining} remaining`;
       }
       accordionItems.push(
-        <AccordionItem title={`Loop iterations (${buttons.length})`}>
+        <AccordionItem
+          key="mi-loop-iterations"
+          title={`Loop iterations (${buttons.length})`}
+        >
           <div>{text}</div>
           <div>{buttons}</div>
         </AccordionItem>

@@ -32,7 +32,6 @@ import {
 import { gray } from '@carbon/colors';
 
 import Editor, { DiffEditor } from '@monaco-editor/react';
-
 import MDEditor from '@uiw/react-md-editor';
 import HttpService from '../services/HttpService';
 import ReactDiagramEditor from '../components/ReactDiagramEditor';
@@ -182,7 +181,9 @@ export default function ProcessModelEditDiagram() {
 
     HttpService.makeCallToBackend({
       path: `/${processModelPath}?include_file_references=true`,
-      successCallback: setProcessModel,
+      successCallback: (result: any) => {
+        setProcessModel(result);
+      },
     });
 
     if (params.file_name) {
@@ -191,7 +192,7 @@ export default function ProcessModelEditDiagram() {
         successCallback: fileResult,
       });
     }
-  }, [processModelPath, params]);
+  }, [processModelPath, params.file_name]);
 
   useEffect(() => {
     const bpmnProcessIds = processModelFile?.bpmn_process_ids;
@@ -914,7 +915,7 @@ export default function ProcessModelEditDiagram() {
           )}
           <Button
             className="m-top-10"
-            kind="secondary"
+            kind="primary"
             onClick={() => handleProcessScriptAssist()}
             disabled={scriptAssistLoading}
           >

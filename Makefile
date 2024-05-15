@@ -20,19 +20,23 @@ IN_FRONTEND ?= $(DOCKER_COMPOSE) run $(FRONTEND_CONTAINER)
 
 SPIFFWORKFLOW_BACKEND_ENV ?= local_development
 
+BACKEND_SQLITE_FILE ?= src/instance/db_$(SPIFFWORKFLOW_BACKEND_ENV).sqlite3
+NODE_MODULES_DIR ?= spiffworkflow-frontend/node_modules
+JUST ?=
+
 YML_FILES := -f docker-compose.yml \
 	-f $(BACKEND_DEV_OVERLAY) \
 	-f $(FRONTEND_DEV_OVERLAY) \
 	-f $(ARENA_DEV_OVERLAY)
 
 all: dev-env start-dev run-pyl
-	@/bin/true
+	@true
 
 build-images:
 	$(DOCKER_COMPOSE) build
 
-dev-env: stop-dev build-images poetry-i be-poetry-i be-recreate-db fe-npm-i
-	@/bin/true
+dev-env: stop-dev build-images poetry-i be-poetry-i be-db-clean fe-npm-i
+	@true
 
 start-dev: stop-dev
 	$(DOCKER_COMPOSE) up -d
@@ -42,6 +46,12 @@ stop-dev:
 
 be-clear-log-file:
 	$(IN_BACKEND) rm -f log/unit_testing.log
+
+be-db-clean:
+	$(IN_BACKEND) ./bin/recreate_db clean
+
+be-db-migrate:
+	$(IN_BACKEND) ./bin/recreate_db migrate
 
 be-logs:
 	docker logs -f $(BACKEND_CONTAINER)
@@ -60,24 +70,21 @@ be-poetry-rm:
 		rm -rf "$(BACKEND_CONTAINER)/.venv"; \
 	fi
 
-be-recreate-db:
-	$(IN_BACKEND) ./bin/recreate_db clean
-
 be-sh:
 	$(IN_BACKEND) /bin/bash
 
 be-sqlite:
-	@if [ ! -f "$(BACKEND_CONTAINER)/src/instance/db_$(SPIFFWORKFLOW_BACKEND_ENV).sqlite3" ]; then \
-		echo "SQLite database file does not exist: $(BACKEND_CONTAINER)/src/instance/db_$(SPIFFWORKFLOW_BACKEND_ENV).sqlite3"; \
+	@if [ ! -f "$(BACKEND_CONTAINER)/$(BACKEND_SQLITE_FILE)" ]; then \
+		echo "SQLite database file does not exist: $(BACKEND_CONTAINER)/$(BACKEND_SQLITE_FILE)"; \
 		exit 1; \
 	fi
-	$(IN_BACKEND) sqlite3 src/instance/db_$(SPIFFWORKFLOW_BACKEND_ENV).sqlite3
+	$(IN_BACKEND) sqlite3 $(BACKEND_SQLITE_FILE)
 
 be-tests: be-clear-log-file
-	$(IN_BACKEND) poetry run pytest
+	$(IN_BACKEND) poetry run pytest tests/spiffworkflow_backend/$(JUST)
 
 be-tests-par: be-clear-log-file
-	$(IN_BACKEND) poetry run pytest -n auto -x --random-order
+	$(IN_BACKEND) poetry run pytest -n auto -x --random-order tests/spiffworkflow_backend/$(JUST)
 
 fe-lint-fix:
 	$(IN_FRONTEND) npm run lint:fix
@@ -85,11 +92,22 @@ fe-lint-fix:
 fe-logs:
 	docker logs -f $(FRONTEND_CONTAINER)
 
+fe-npm-clean:
+	@if [ -d "$(NODE_MODULES_DIR)" ]; then \
+		rm -rf "$(NODE_MODULES_DIR)"; \
+	fi
+
 fe-npm-i:
 	$(IN_FRONTEND) npm i && git checkout -- spiffworkflow-frontend/package-lock.json
 
+fe-npm-rm:
+	$(IN_FRONTEND) npm rm $(JUST)
+
 fe-sh:
 	$(IN_FRONTEND) /bin/bash
+
+fe-unimported:
+	$(IN_FRONTEND) npx unimported
 
 poetry-i:
 	$(IN_ARENA) poetry install --no-root
@@ -103,10 +121,10 @@ pre-commit:
 	$(IN_ARENA) poetry run pre-commit run --verbose --all-files
 
 ruff:
-	$(IN_ARENA) poetry run ruff --fix spiffworkflow-backend
+	$(IN_ARENA) poetry run ruff check --fix spiffworkflow-backend
 
 run-pyl: fe-lint-fix ruff pre-commit be-mypy be-tests-par
-	@/bin/true
+	@true
 
 sh:
 	$(IN_ARENA) /bin/bash
@@ -117,7 +135,7 @@ take-ownership:
 .PHONY: build-images dev-env \
 	start-dev stop-dev \
 	be-clear-log-file be-logs be-mypy be-poetry-i be-poetry-lock be-poetry-rm \
-	be-recreate-db be-sh be-sqlite be-tests be-tests-par \
-	fe-lint-fix fe-logs fe-npm-i fe-sh \
+	be-db-clean be-db-migrate be-sh be-sqlite be-tests be-tests-par \
+	fe-lint-fix fe-logs fe-npm-clean fe-npm-i fe-npm-rm fe-sh fe-unimported  \
 	poetry-i poetry-rm pre-commit ruff run-pyl \
 	take-ownership

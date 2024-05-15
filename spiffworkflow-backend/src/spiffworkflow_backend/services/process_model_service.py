@@ -3,6 +3,7 @@ import os
 import shutil
 import uuid
 from json import JSONDecodeError
+from typing import Any
 from typing import TypeVar
 
 from flask import current_app
@@ -35,7 +36,6 @@ class ProcessModelWithInstancesNotDeletableError(Exception):
 
 
 class ProcessModelService(FileSystemService):
-
     """This is a way of persisting json files to the file system in a way that mimics the data
     as it would have been stored in the database. This is specific to Workflow Specifications, and
     Workflow Specification process_groups.
@@ -113,6 +113,17 @@ class ProcessModelService(FileSystemService):
 
         configured_prefix = current_app.config["SPIFFWORKFLOW_BACKEND_EXTENSIONS_PROCESS_MODEL_PREFIX"]
         return process_model.id.startswith(f"{configured_prefix}/")
+
+    @classmethod
+    def add_json_data_to_json_file(cls, process_model: ProcessModelInfo, file_name: str, json_data: dict) -> None:
+        full_json_data = json_data
+        process_model_path = os.path.abspath(os.path.join(FileSystemService.root_path(), process_model.id_for_file_path()))
+        json_path = os.path.abspath(os.path.join(process_model_path, file_name))
+        if os.path.exists(json_path):
+            with open(json_path) as f:
+                existing_json = json.loads(f.read())
+            full_json_data = {**existing_json, **json_data}
+        cls.write_json_file(json_path, full_json_data)
 
     @classmethod
     def save_process_model(cls, process_model: ProcessModelInfo) -> None:
@@ -549,6 +560,11 @@ class ProcessModelService(FileSystemService):
                     process_groups.append(scanned_process_group)
             return process_groups
 
+    @classmethod
+    def restrict_dict(cls, data: dict[str, Any]) -> dict[str, Any]:
+        allowed_keys = ProcessGroup.get_valid_properties()
+        return {key: data[key] for key in data if key in allowed_keys}
+
     # NOTE: find_all_nested_items was added to avoid potential backwards compatibility issues.
     # we may be able to remove it and always pass "find_direct_nested_items=False" whenever looking
     # through the subdirs of a process group instead.
@@ -564,7 +580,8 @@ class ProcessModelService(FileSystemService):
                 # we don't store `id` in the json files, so we add it back in here
                 relative_path = os.path.relpath(dir_path, FileSystemService.root_path())
                 data["id"] = cls.path_to_id(relative_path)
-                process_group = ProcessGroup(**data)
+                restricted_data = cls.restrict_dict(data)
+                process_group = ProcessGroup(**restricted_data)
                 if process_group is None:
                     raise ApiError(
                         error_code="process_group_could_not_be_loaded_from_disk",

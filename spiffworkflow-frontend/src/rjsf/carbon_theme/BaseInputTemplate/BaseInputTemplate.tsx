@@ -6,10 +6,15 @@ import {
   StrictRJSFSchema,
   WidgetProps,
 } from '@rjsf/utils';
+import { parse } from 'date-fns';
 
 import { useCallback } from 'react';
 import { useDebouncedCallback } from 'use-debounce';
-import { DATE_FORMAT_CARBON, DATE_FORMAT_FOR_DISPLAY } from '../../../config';
+import {
+  DATE_FORMAT,
+  DATE_FORMAT_CARBON,
+  DATE_FORMAT_FOR_DISPLAY,
+} from '../../../config';
 import DateAndTimeService from '../../../services/DateAndTimeService';
 import { getCommonAttributes } from '../../helpers';
 
@@ -73,12 +78,29 @@ export default function BaseInputTemplate<
   );
 
   const addDebouncedOnChangeDate = useDebouncedCallback(
-    (target: React.ChangeEvent<HTMLInputElement>) => {
-      _onChange(target);
+    (fullObject: React.ChangeEvent<HTMLInputElement>) => {
+      fullObject.target.value =
+        DateAndTimeService.attemptToConvertUnknownDateStringFormatToKnownFormat(
+          fullObject.target.value
+        );
+      _onChange(fullObject);
     },
     // delay in ms
-    1000
+    100
   );
+
+  let enableCounter = false;
+  let maxCount = undefined;
+  if (options && options.counter) {
+    enableCounter = true;
+    if (schema && schema.maxLength) {
+      maxCount = schema.maxLength;
+    } else {
+      throw new Error(
+        `Counter was requested but no maxLength given on the ${label}`
+      );
+    }
+  }
 
   const commonAttributes = getCommonAttributes(
     label,
@@ -93,6 +115,8 @@ export default function BaseInputTemplate<
     // it should in be y-m-d when it gets here.
     let dateValue: string | null = value;
     if (value || value === 0) {
+      // it would be good if we could compare against the length of the desired format but that doesn't work in all cases and causes some issues.
+      // 10 seems to be a good value check against.
       if (value.length < 10) {
         dateValue = value;
       } else {
@@ -114,6 +138,7 @@ export default function BaseInputTemplate<
           placeholder={DATE_FORMAT_FOR_DISPLAY}
           helperText={commonAttributes.helperText}
           type="text"
+          labelText=""
           size="md"
           value={dateValue}
           autocomplete="off"
@@ -135,6 +160,7 @@ export default function BaseInputTemplate<
         <TextInput
           id={id}
           className="text-input"
+          labelText=""
           helperText={commonAttributes.helperText}
           invalid={commonAttributes.invalid}
           invalidText={commonAttributes.errorMessageForField}
@@ -144,6 +170,8 @@ export default function BaseInputTemplate<
           onChange={_onChange}
           onBlur={_onBlur}
           onFocus={_onFocus}
+          enableCounter={enableCounter}
+          maxCount={maxCount}
           // eslint-disable-next-line react/jsx-props-no-spreading
           {...inputProps}
         />

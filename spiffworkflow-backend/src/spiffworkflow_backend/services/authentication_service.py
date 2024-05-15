@@ -12,6 +12,7 @@ from typing import cast
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509 import load_der_x509_certificate
+from flask import url_for
 
 from spiffworkflow_backend.models.user import SPIFF_GENERATED_JWT_ALGORITHM
 from spiffworkflow_backend.models.user import SPIFF_GENERATED_JWT_AUDIENCE
@@ -118,7 +119,9 @@ class AuthenticationService:
     @classmethod
     def open_id_endpoint_for_name(cls, name: str, authentication_identifier: str) -> str:
         """All openid systems provide a mapping of static names to the full path of that endpoint."""
-        openid_config_url = f"{cls.server_url(authentication_identifier)}/.well-known/openid-configuration"
+        appropriate_server_url = cls.server_url(authentication_identifier)
+        openid_config_url = f"{appropriate_server_url}/.well-known/openid-configuration"
+
         if authentication_identifier not in cls.ENDPOINT_CACHE:
             cls.ENDPOINT_CACHE[authentication_identifier] = {}
         if authentication_identifier not in cls.JSON_WEB_KEYSET_CACHE:
@@ -195,6 +198,13 @@ class AuthenticationService:
             algorithm = str(header.get("alg"))
             json_key_configs = cls.jwks_public_key_for_key_id(authentication_identifier, key_id)
             public_key: Any = None
+            jwt_decode_options = {
+                "verify_exp": False,
+                "verify_aud": False,
+                "verify_iat": current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_VERIFY_IAT"],
+                "verify_nbf": current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_VERIFY_NBF"],
+                "leeway": current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_LEEWAY"],
+            }
 
             if "x5c" not in json_key_configs:
                 public_key = cls.public_key_from_rsa_public_numbers(json_key_configs)
@@ -211,10 +221,11 @@ class AuthenticationService:
                 public_key,
                 algorithms=[algorithm],
                 audience=cls.valid_audiences(authentication_identifier)[0],
-                options={"verify_exp": False, "verify_aud": False},
+                options=jwt_decode_options,
             )
         return cast(dict, parsed_token)
 
+    # returns either https://spiffworkflow.example.com or https://spiffworkflow.example.com/api
     @staticmethod
     def get_backend_url() -> str:
         return str(current_app.config["SPIFFWORKFLOW_BACKEND_URL"])
@@ -237,15 +248,19 @@ class AuthenticationService:
         )
         return state
 
-    def get_login_redirect_url(self, state: str, authentication_identifier: str, redirect_url: str = "/v1.0/login_return") -> str:
-        return_redirect_url = f"{self.get_backend_url()}{redirect_url}"
+    def get_login_redirect_url(self, state: str, authentication_identifier: str, redirect_url: str | None = None) -> str:
+        redirect_url_to_use = redirect_url
+        if redirect_url_to_use is None:
+            host_url = request.host_url.strip("/")
+            login_return_path = url_for("/v1_0.spiffworkflow_backend_routes_authentication_controller_login_return")
+            redirect_url_to_use = f"{host_url}{login_return_path}"
         login_redirect_url = (
             self.open_id_endpoint_for_name("authorization_endpoint", authentication_identifier=authentication_identifier)
             + f"?state={state}&"
             + "response_type=code&"
             + f"client_id={self.client_id(authentication_identifier)}&"
             + "scope=openid profile email&"
-            + f"redirect_uri={return_redirect_url}"
+            + f"redirect_uri={redirect_url_to_use}"
         )
         return login_redirect_url
 
@@ -295,8 +310,8 @@ class AuthenticationService:
         valid = True
         now = round(time.time())
 
-        # give a 5 second leeway to iat in case keycloak server time doesn't match backend server
-        iat_clock_skew_leeway = 5
+        # TODO: use verify_exp True in jwt decode to check this instead
+        iat_clock_skew_leeway = current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_LEEWAY"]
 
         iss = decoded_token["iss"]
         aud = decoded_token["aud"] if "aud" in decoded_token else None

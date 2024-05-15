@@ -9,6 +9,7 @@ from flask import jsonify
 from flask import make_response
 from flask import redirect
 from flask import request
+from flask import url_for
 from werkzeug.wrappers import Response
 
 from spiffworkflow_backend.exceptions.api_error import ApiError
@@ -115,7 +116,7 @@ def login(
     frontend_url = str(current_app.config.get("SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND"))
     if not redirect_url.startswith(frontend_url):
         raise InvalidRedirectUrlError(
-            f"Invalid redirect url was given: '{redirect_url}'. It must match the domain the frontend is running on."
+            f"Invalid redirect url was given: '{redirect_url}'. It must start with the frontend url: '{frontend_url}'"
         )
 
     if current_app.config.get("SPIFFWORKFLOW_BACKEND_AUTHENTICATION_DISABLED"):
@@ -193,7 +194,9 @@ def login_with_access_token(access_token: str, authentication_identifier: str) -
 
 
 def login_api(authentication_identifier: str) -> Response:
-    redirect_url = "/v1.0/login_api_return"
+    host_url = request.host_url.strip("/")
+    login_return_path = url_for("/v1_0.spiffworkflow_backend_routes_authentication_controller_login_return")
+    redirect_url = f"{host_url}{login_return_path}"
     state = AuthenticationService.generate_state(redirect_url, authentication_identifier)
     login_redirect_url = AuthenticationService().get_login_redirect_url(state.decode("UTF-8"), redirect_url)
     return redirect(login_redirect_url)
@@ -417,17 +420,18 @@ def _get_decoded_token(token: str) -> dict:
     try:
         decoded_token: dict = AuthenticationService.parse_jwt_token(_get_authentication_identifier_from_request(), token)
     except Exception as e:
+        current_app.logger.warning(f"Received exception when attempting to decode token: {e.__class__.__name__}: {str(e)}")
         AuthenticationService.set_user_has_logged_out()
         raise ApiError(error_code="invalid_token", message="Cannot decode token.", status_code=401) from e
+
+    if "iss" in decoded_token:
+        return decoded_token
     else:
-        if "iss" in decoded_token:
-            return decoded_token
-        else:
-            current_app.logger.error(f"Unknown token type in get_decoded_token: token: {token}")
-            raise ApiError(
-                error_code="unknown_token",
-                message="Unknown token type in get_decoded_token",
-            )
+        current_app.logger.error(f"Unknown token type in get_decoded_token: token: {token}")
+        raise ApiError(
+            error_code="unknown_token",
+            message="Unknown token type in get_decoded_token",
+        )
 
 
 def _get_authentication_identifier_from_request() -> str:
