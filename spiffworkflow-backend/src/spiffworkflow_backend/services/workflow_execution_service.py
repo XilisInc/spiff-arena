@@ -157,18 +157,12 @@ class ExecutionStrategy:
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     for spiff_task in engine_steps:
-                        def run_with_context(f):
-                            header_copy = dict(flask.request.headers)
-                            context = current_app.test_request_context(headers=header_copy)
-                            def inner_context(*args):
-                                with context:
-                                    return f(*args)
-                            return inner_context
+                        run_with_context = flask.copy_current_request_context(self._run)
 
                         self.delegate.will_complete_task(spiff_task)
                         futures.append(
                             executor.submit(
-                                run_with_context(self._run),
+                                run_with_context,
                                 spiff_task,
                                 current_app._get_current_object(),
                                 user,
