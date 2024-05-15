@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 import sentry_sdk
+import flask
 from flask import current_app
 from flask import g
 from SpiffWorkflow.bpmn import BpmnEvent  # type: ignore
@@ -198,7 +199,12 @@ class ServiceTaskDelegate:
                 parsed_response: dict = {}
                 try:
                     # this will raise on ConnectionError - like a bad url, and maybe limited other scenarios
-                    proxied_response = requests.post(call_url, json=params, timeout=CONNECTOR_PROXY_COMMAND_TIMEOUT)
+                    proxied_response = requests.post(
+                        call_url,
+                        headers={"Authorization": flask.request.headers["Authorization"]},
+                        json=params,
+                        timeout=CONNECTOR_PROXY_COMMAND_TIMEOUT
+                    )
 
                     status_code = proxied_response.status_code
                     response_text = proxied_response.text

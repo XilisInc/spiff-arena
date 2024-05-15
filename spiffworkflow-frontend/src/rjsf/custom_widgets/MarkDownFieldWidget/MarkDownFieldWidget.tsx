@@ -63,6 +63,7 @@ export default function MarkDownFieldWidget({
       }`;
     }
   }
+  const preview = (uiSchema && uiSchema.readonly) ? "preview" : "live";
 
   // cds-- items come from carbon and how it displays helper text and errors.
   // carbon also removes helper text when error so doing that here as well.
@@ -81,6 +82,7 @@ export default function MarkDownFieldWidget({
             value={value}
             onChange={onChangeLocal}
             autoFocus={autofocus}
+            preview={preview}
           />
         </div>
       </div>
