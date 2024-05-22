@@ -251,9 +251,12 @@ class AuthenticationService:
     def get_login_redirect_url(self, state: str, authentication_identifier: str, redirect_url: str | None = None) -> str:
         redirect_url_to_use = redirect_url
         if redirect_url_to_use is None:
-            host_url = request.host_url.strip("/")
-            login_return_path = url_for("/v1_0.spiffworkflow_backend_routes_authentication_controller_login_return")
-            redirect_url_to_use = f"{host_url}{login_return_path}"
+            # host_url = self.get_backend_url()
+            # host_url = request.host_url.strip("/")
+            # login_return_path = url_for("/v1_0.spiffworkflow_backend_routes_authentication_controller_login_return")
+            # redirect_url_to_use = f"{host_url}{login_return_path}"
+            # HACK
+            redirect_url_to_use = f"{self.get_backend_url()}/v1.0/login_return"
         login_redirect_url = (
             self.open_id_endpoint_for_name("authorization_endpoint", authentication_identifier=authentication_identifier)
             + f"?state={state}&"
