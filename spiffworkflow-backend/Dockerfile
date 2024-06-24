@@ -23,7 +23,7 @@ FROM base AS deployment
 # jq because it is really useful, even for scenarios where people might have environment variables with json values they might need to use for configs. about 1MB.
 RUN apt-get update \
   && apt-get clean -y \
-  && apt-get install -y -q git-core curl procps gunicorn3 default-mysql-client vim-tiny jq \
+  && apt-get install -y -q git-core curl procps gunicorn3 default-mysql-client vim-tiny jq libpq-dev\
   && rm -rf /var/lib/apt/lists/*
 
 # keep pip up to date
@@ -46,7 +46,7 @@ RUN useradd _gunicorn --no-create-home --user-group
 
 # default-libmysqlclient-dev for mysqlclient lib
 RUN apt-get update \
-  && apt-get install -y -q gcc libssl-dev libpq-dev default-libmysqlclient-dev pkg-config libffi-dev
+  && apt-get install -y -q gcc libssl-dev libpq-dev default-libmysqlclient-dev pkg-config libffi-dev libpq-dev
 
 # poetry install takes a long time and can be cached if dependencies don't change,
 # so that's why we tolerate running it twice.
